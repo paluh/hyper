@@ -11,6 +11,14 @@ module Hyper.Node.Server
 
 import Prelude
 
+import Data.Array as Array
+import Data.HTTP.Method as Method
+import Data.Int as Int
+import Data.StrMap as StrMap
+import Data.String as String
+import Node.Buffer as Buffer
+import Node.HTTP as HTTP
+import Node.Stream as Stream
 import Control.IxMonad (ipure, (:*>), (:>>=))
 import Control.Monad.Aff (Aff, launchAff, launchAff_, makeAff, nonCanceler, runAff_)
 import Control.Monad.Aff.AVar (AVAR, makeEmptyVar, makeVar, putVar, takeVar)
@@ -62,14 +70,31 @@ newtype NodeResponse m e
 derive instance newtypeNodeResponse ∷ Newtype (NodeResponse m e) _
 
 writeString :: forall m e. MonadAff e m => Encoding -> String -> NodeResponse m e
-writeString enc str = NodeResponse $ \w -> liftAff (makeAff (writeAsAff w))
+writeString enc str =
+  NodeResponse $ \w -> liftAff (makeAff (writeChunk w 0))
   where
-    writeAsAff w k = do
-      Stream.writeString w enc str (k (pure unit)) >>=
-      if _
-        then k (pure unit)
-        else k (throwError (error "Failed to write string to response"))
-      pure nonCanceler
+    -- We operate on a (Array Char), instead of the String, to slice
+    -- it into chunks:
+    chars = String.toCharArray str
+    totalLength = Array.length chars
+    -- This function writes a chunk at the given offset, and recurses
+    -- if there are more chunks to be written.
+    writeChunk w offset fail succeed = do
+      -- We ignore the result of write as we cannot access the 'drain'
+      -- event anyway:
+      void $
+        Stream.writeString w enc (String.fromCharArray chunk) $
+        -- In the callback from `writeString`, we succeed the Aff
+        -- value if we have just written the last chunk, otherwise we
+        -- keep on writing chunks.
+        if isLastChunk
+          then succeed unit
+          else writeChunk w nextOffset fail succeed
+      where
+        chunkSize = 1024 * 8
+        nextOffset = min totalLength (offset + chunkSize)
+        isLastChunk = nextOffset == totalLength
+        chunk = Array.slice offset nextOffset chars
 
 write :: forall m e. MonadAff e m => Buffer -> NodeResponse m e
 write buffer = NodeResponse $ \w ->
