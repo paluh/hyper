@@ -15,5 +15,8 @@
   },
   "author": "oskar.wickstrom@gmail.com",
   "license": "MPL-2.0",
-  "homepage": "http://hyper.wickstrom.tech"
+  "homepage": "http://hyper.wickstrom.tech",
+  "devDependencies": {
+    "pulp": "^12.0.1"
+  }
 }

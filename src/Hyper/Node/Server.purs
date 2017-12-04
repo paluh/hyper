@@ -1,49 +1,48 @@
-module Hyper.Node.Server
-       ( HttpRequest
-       , HttpResponse
-       , NodeResponse
-       , writeString
-       , write
-       , module Hyper.Node.Server.Options
-       , runServer
-       , runServer'
-       ) where
+module Hyper.Node.Server where
+--        ( HttpRequest
+--        , HttpResponse
+--        , NodeResponse
+--        , writeString
+--        , write
+--        , module Hyper.Node.Server.Options
+--        , runServer
+--        , runServer'
+--        ) where
 
 import Prelude
-import Data.Array as Array
-import Data.HTTP.Method as Method
-import Data.Int as Int
-import Data.StrMap as StrMap
-import Data.String as String
-import Node.Buffer as Buffer
-import Node.HTTP as HTTP
-import Node.Stream as Stream
+
 import Control.IxMonad (ipure, (:*>), (:>>=))
-import Control.Monad.Aff (Aff, launchAff, makeAff)
-import Control.Monad.Aff.AVar (putVar, takeVar, modifyVar, makeVar', AVAR, makeVar)
+import Control.Monad.Aff (Aff, launchAff, launchAff_, makeAff, nonCanceler, runAff_)
+import Control.Monad.Aff.AVar (AVAR, makeEmptyVar, makeVar, putVar, takeVar)
 import Control.Monad.Aff.Class (class MonadAff, liftAff)
 import Control.Monad.Eff (Eff)
 import Control.Monad.Eff.Class (class MonadEff, liftEff)
-import Control.Monad.Eff.Console (CONSOLE, log)
 import Control.Monad.Eff.Exception (EXCEPTION, catchException)
 import Control.Monad.Error.Class (throwError)
+import Data.Array as Array
 import Data.Either (Either(..), either)
+import Data.HTTP.Method as Method
+import Data.Int as Int
 import Data.Lazy (defer)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
+import Data.StrMap as StrMap
+import Data.String as String
 import Data.Tuple (Tuple(..))
 import Hyper.Conn (Conn)
 import Hyper.Middleware (Middleware, evalMiddleware, lift')
 import Hyper.Middleware.Class (getConn, modifyConn)
-import Hyper.Node.Server.Options as Hyper.Node.Server.Options
 import Hyper.Node.Server.Options (Options)
 import Hyper.Request (class ReadableBody, class Request, class StreamableBody, RequestData, parseUrl, readBody)
 import Hyper.Response (class ResponseWritable, class Response, ResponseEnded, StatusLineOpen)
 import Hyper.Status (Status(..))
 import Node.Buffer (BUFFER, Buffer)
+import Node.Buffer as Buffer
 import Node.Encoding (Encoding(..))
 import Node.HTTP (HTTP)
+import Node.HTTP as HTTP
 import Node.Stream (Stream, Writable)
+import Node.Stream as Stream
 
 
 data HttpRequest
@@ -64,34 +63,29 @@ newtype NodeResponse m e
 
 writeString :: forall m e. MonadAff e m => Encoding -> String -> NodeResponse m e
 writeString enc str =
-  NodeResponse $ \w -> liftAff (makeAff (writeChunk w 0))
+  NodeResponse $ \w -> liftAff (writeString' w 0)
   where
-    -- We operate on a (Array Char), instead of the String, to slice
-    -- it into chunks:
     chars = String.toCharArray str
     totalLength = Array.length chars
-    -- This function writes a chunk at the given offset, and recurses
-    -- if there are more chunks to be written.
-    writeChunk w offset fail succeed = do
-      -- We ignore the result of write as we cannot access the 'drain'
-      -- event anyway:
-      void $
-        Stream.writeString w enc (String.fromCharArray chunk) $
-        -- In the callback from `writeString`, we succeed the Aff
-        -- value if we have just written the last chunk, otherwise we
-        -- keep on writing chunks.
-        if isLastChunk
-          then succeed unit
-          else writeChunk w nextOffset fail succeed
-      where
-        chunkSize = 1024 * 8
+    chunkSize = 1024 * 8
+
+    writeString' w offset = do
+      let
         nextOffset = min totalLength (offset + chunkSize)
         isLastChunk = nextOffset == totalLength
         chunk = Array.slice offset nextOffset chars
+      writeChunk w chunk
+      if isLastChunk
+        then pure unit
+        else writeString' w nextOffset
+
+    writeChunk w chunk = makeAff (\k → do
+        Stream.writeString w enc (String.fromCharArray chunk) (k (Right unit)) *> pure nonCanceler)
 
 write :: forall m e. MonadAff e m => Buffer -> NodeResponse m e
 write buffer = NodeResponse $ \w ->
-  liftAff (makeAff (\fail succeed -> void $ Stream.write w buffer (succeed unit)))
+  liftAff (makeAff (\k -> Stream.write w buffer (k (pure unit))
+                          *> pure nonCanceler))
 
 instance stringNodeResponse :: (MonadAff e m) => ResponseWritable (NodeResponse m e) m String where
   toResponse = ipure <<< writeString UTF8
@@ -113,8 +107,8 @@ readBodyAsBuffer
   -> Aff (http :: HTTP, avar :: AVAR, buffer :: BUFFER | e) Buffer
 readBodyAsBuffer (HttpRequest request _) = do
   let stream = HTTP.requestAsStream request
-  bodyResult <- makeVar
-  chunks <- makeVar' []
+  bodyResult <- makeEmptyVar
+  chunks <- makeVar []
   fillResult <- liftEff $
     catchException (pure <<< Left) (Right <$> fillBody stream chunks bodyResult)
   -- Await the body, or an error.
@@ -125,16 +119,19 @@ readBodyAsBuffer (HttpRequest request _) = do
     fillBody stream chunks bodyResult = do
       -- Append all chunks to the body buffer.
       Stream.onData stream \chunk ->
-        void (launchAff (modifyVar (_ <> [chunk]) chunks))
+        let modification = do
+              v <- takeVar chunks
+              putVar (v <> [chunk]) chunks
+        in void (launchAff modification)
       -- Complete with `Left` on error.
       Stream.onError stream $
-        void <<< launchAff <<< putVar bodyResult <<< Left
+        launchAff_ <<< flip putVar bodyResult <<< Left
       -- Complete with `Right` on successful "end" event.
       Stream.onEnd stream $ void $ launchAff $
         takeVar chunks
         >>= concat'
         >>= (pure <<< Right)
-        >>= putVar bodyResult
+        >>= flip putVar bodyResult
     concat' = liftEff <<< Buffer.concat
 
 instance readableBodyHttpRequestString :: (Monad m, MonadAff (http :: HTTP, avar :: AVAR, buffer :: BUFFER | e) m)
@@ -271,8 +268,14 @@ runServer' options components runM middleware = do
                  , response: HttpResponse response
                  , components: components
                  }
-      in catchException options.onRequestError (void (launchAff (runM (evalMiddleware middleware conn))))
-
+          callback =
+            case _ of
+              Left err -> options.onRequestError err
+              Right _ -> pure unit
+      in conn
+         # evalMiddleware middleware
+         # runM
+         # runAff_ callback
 
 runServer
   :: forall e c c'.
