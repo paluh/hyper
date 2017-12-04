@@ -1,13 +1,13 @@
 module Hyper.Node.Server where
---        ( HttpRequest
---        , HttpResponse
---        , NodeResponse
---        , writeString
---        , write
---        , module Hyper.Node.Server.Options
---        , runServer
---        , runServer'
---        ) where
+        ( HttpRequest
+        , HttpResponse
+        , module Hyper.Node.Server.Options
+        , NodeResponse
+        , writeString
+        , write
+        , runServer
+        , runServer'
+        ) where
 
 import Prelude
 
@@ -32,7 +32,7 @@ import Data.Tuple (Tuple(..))
 import Hyper.Conn (Conn)
 import Hyper.Middleware (Middleware, evalMiddleware, lift')
 import Hyper.Middleware.Class (getConn, modifyConn)
-import Hyper.Node.Server.Options (Options)
+import Hyper.Node.Server.Options (defaultOptions, defaultOptionsWithLogging, Hostname(..), Options, Port(..))
 import Hyper.Request (class ReadableBody, class Request, class StreamableBody, RequestData, parseUrl, readBody)
 import Hyper.Response (class ResponseWritable, class Response, ResponseEnded, StatusLineOpen)
 import Hyper.Status (Status(..))
