@@ -1,4 +1,4 @@
-module Hyper.Node.Server where
+module Hyper.Node.Server
         ( HttpRequest
         , HttpResponse
         , module Hyper.Node.Server.Options
