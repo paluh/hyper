@@ -24,7 +24,7 @@ import Data.HTTP.Method as Method
 import Data.Int as Int
 import Data.Lazy (defer)
 import Data.Maybe (Maybe(..))
-import Data.Newtype (unwrap)
+import Data.Newtype (class Newtype, unwrap)
 import Data.StrMap as StrMap
 import Data.Tuple (Tuple(..))
 import Hyper.Conn (Conn)
@@ -59,6 +59,7 @@ instance requestHttpRequest :: Monad m => Request HttpRequest m where
 -- the Stream.
 newtype NodeResponse m e
   = NodeResponse (Writable () e -> m Unit)
+derive instance newtypeNodeResponse ∷ Newtype (NodeResponse m e) _
 
 writeString :: forall m e. MonadAff e m => Encoding -> String -> NodeResponse m e
 writeString enc str = NodeResponse $ \w -> liftAff (makeAff (writeAsAff w))
