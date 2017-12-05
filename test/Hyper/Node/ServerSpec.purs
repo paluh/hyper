@@ -35,8 +35,8 @@ foreign import streamBufferImpl ∷ ∀ eff. EffFn1 eff (WritableStream eff) Buf
 streamBuffer ∷ ∀ eff. WritableStream eff → Eff eff Buffer
 streamBuffer = runEffFn1 streamBufferImpl
 
-testString :: forall eff. Int -> Aff eff String
-testString totalLength = do
+buildTestString :: forall eff. Int -> Aff eff String
+buildTestString totalLength = do
   let
     str = go "a" 1
   length str `shouldEqual` totalLength
@@ -51,18 +51,18 @@ spec =
   describe "Hyper.Node.Server" do
     describe "writeString" do
       it "handles empty string" do
-        output ← liftEff $ memoryWritableStream 100
+        output ← liftEff $ memoryWritableStream 10
         let writer = unwrap $ writeString UTF8 ""
         writer (toWritable output)
 
       it "handles short (< 16 KB) string" do
-        output ← liftEff $ memoryWritableStream 100
-        str ← testString 3000
+        output ← liftEff $ memoryWritableStream 10
+        str ← buildTestString 3000
         let writer = unwrap $ writeString UTF8 str
         writer (toWritable output)
 
       it "handles long (> 64 KB) string" do
-        str ← testString 65000
-        output ← liftEff $ memoryWritableStream 100
+        str ← buildTestString 65000
+        output ← liftEff $ memoryWritableStream 10
         let writer = unwrap $ writeString UTF8 str
         writer (toWritable output)

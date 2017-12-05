@@ -71,30 +71,24 @@ derive instance newtypeNodeResponse ∷ Newtype (NodeResponse m e) _
 
 writeString :: forall m e. MonadAff e m => Encoding -> String -> NodeResponse m e
 writeString enc str =
-  NodeResponse $ \w -> liftAff (makeAff (writeChunk w 0))
+  NodeResponse $ \w -> liftAff (writeString' w 0)
   where
-    -- We operate on a (Array Char), instead of the String, to slice
-    -- it into chunks:
     chars = String.toCharArray str
     totalLength = Array.length chars
-    -- This function writes a chunk at the given offset, and recurses
-    -- if there are more chunks to be written.
-    writeChunk w offset fail succeed = do
-      -- We ignore the result of write as we cannot access the 'drain'
-      -- event anyway:
-      void $
-        Stream.writeString w enc (String.fromCharArray chunk) $
-        -- In the callback from `writeString`, we succeed the Aff
-        -- value if we have just written the last chunk, otherwise we
-        -- keep on writing chunks.
-        if isLastChunk
-          then succeed unit
-          else writeChunk w nextOffset fail succeed
-      where
-        chunkSize = 1024 * 8
+    chunkSize = 1024 * 8
+
+    writeString' w offset = do
+      let
         nextOffset = min totalLength (offset + chunkSize)
         isLastChunk = nextOffset == totalLength
         chunk = Array.slice offset nextOffset chars
+      writeChunk w chunk
+      if isLastChunk
+        then pure unit
+        else writeString' w nextOffset
+
+    writeChunk w chunk = makeAff (\k → do
+        Stream.writeString w enc (String.fromCharArray chunk) (k (Right unit)) *> pure nonCanceler)
 
 write :: forall m e. MonadAff e m => Buffer -> NodeResponse m e
 write buffer = NodeResponse $ \w ->
