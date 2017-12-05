@@ -9,7 +9,7 @@ import Control.Monad.Eff.Uncurried (EffFn1, runEffFn1)
 import Data.Newtype (unwrap)
 import Data.String (length, take)
 import Hyper.Node.Server (writeString)
-import Node.Buffer (Buffer)
+import Node.Buffer (BUFFER, Buffer, toString)
 import Node.Encoding (Encoding(UTF8))
 import Node.Stream (Writable)
 import Test.Spec (Spec, describe, it)
@@ -46,23 +46,26 @@ buildTestString totalLength = do
     | len * 2 < totalLength = go (str <> str) (len * 2)
     | otherwise = str <> take (totalLength - len) str
 
-spec :: forall eff. Spec eff Unit
+testWriter :: forall eff. String -> Aff ( buffer :: BUFFER | eff) Unit
+testWriter str = do
+  output ← liftEff $ memoryWritableStream 10
+  let writer = unwrap $ writeString UTF8 str
+  writer (toWritable output)
+  buffer ← liftEff $ streamBuffer output
+  str' ← liftEff $ toString UTF8 buffer
+  str' `shouldEqual` str
+
+spec :: forall eff. Spec (buffer ∷ BUFFER | eff) Unit
 spec =
   describe "Hyper.Node.Server" do
     describe "writeString" do
       it "handles empty string" do
-        output ← liftEff $ memoryWritableStream 10
-        let writer = unwrap $ writeString UTF8 ""
-        writer (toWritable output)
+        testWriter ""
 
       it "handles short (< 16 KB) string" do
-        output ← liftEff $ memoryWritableStream 10
         str ← buildTestString 3000
-        let writer = unwrap $ writeString UTF8 str
-        writer (toWritable output)
+        testWriter str
 
       it "handles long (> 64 KB) string" do
         str ← buildTestString 65000
-        output ← liftEff $ memoryWritableStream 10
-        let writer = unwrap $ writeString UTF8 str
-        writer (toWritable output)
+        testWriter str
